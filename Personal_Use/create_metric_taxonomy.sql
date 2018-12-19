@@ -1,8 +1,8 @@
 -- -----------------------------------------------------------------------------
--- Create TAXONOMY table
+-- Create METRIC_TAXONOMY table
 -- -----------------------------------------------------------------------------
 
-CREATE TABLE TAXONOMY
+CREATE TABLE METRIC_TAXONOMY
 (
   "TAXONOMY_TYPE"
     VARCHAR2(32)
@@ -11,7 +11,7 @@ CREATE TABLE TAXONOMY
     VARCHAR2(32)
     NOT NULL,
   "METRIC_NAME"
-    VARCHAR2(32)
+    VARCHAR2(128)
     NOT NULL,
   "CATEGORY"
     VARCHAR2(32)

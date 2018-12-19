@@ -1,19 +1,11 @@
--- NM - flag - all metrics - Category Count View.sql
--- updated 21-Sep-2018 RDCornejo
--- updated 18-Dec-2018 DFHawthorne
--- DOPA Process -- Category Count View
+-- AWR - flag - all metrics - Metrics Time-Series View.sql
+-- 21-Sep-2018 RDCornejo
+-- DOPA Process -- Metrics Time-Series View
 -- -------------------------------------------------------------------------------------------
 -- This work is offered by the author as a professional curtesy, “as-is” and without warranty.  
 -- The author disclaims any liability for damages that may result from using this code.
--- --------------------------------------------------------------------------------------------- 
--- This script has been modified to use an unloaded data set in a Windows XE database
----------------------------------------------------------------------------------------------------------------------------
--- ---------------------------------------------------------------------------------------------------------------------------
--- category count view:
--- ---------------------------------------------------------------------------------------------------------------------------
--- ---------------------------------------------------------------------------------------------------------------------------
-with 
-taxonomy as
+-- -------------------------------------------------------------------------------------------
+with taxonomy as
 (
 select taxonomy_type, stat_source, metric_name, category,  sub_category 
 from metric_Taxonomy
@@ -32,7 +24,6 @@ where 1=1
        trunc(begin_interval_time, 'HH') between trunc(to_date(nvl(:allint_st_MM_DD_YYYY_HH24_MI, to_char(begin_interval_time, 'MM_DD_YYYY_HH24_MI')),'MM_DD_YYYY_HH24_MI') , 'HH')
                                    and trunc(to_date(nvl(:allint_end_MM_DD_YYYY_HH24_MI, to_char(begin_interval_time, 'MM_DD_YYYY_HH24_MI')),'MM_DD_YYYY_HH24_MI') , 'HH')
       )
-
 )
 -- select * from snaps_to_use order by snap_id;  -- testing thus far
 , snaps_for_interval as
@@ -73,8 +64,10 @@ from snaps_for_interval
 )
 -- select intervals from snaps;  -- testing thus far
 , stat AS (
-   SELECT * FROM NORMALISED_METRICS 
- )
+  SELECT * FROM normalised_metrics
+  )
+--select distinct stat_source from stat;
+--select * from stat  /* where snap_id = (select min(snap_id) from stat)+2 and (metric_name like '%cache buffer chains%' or metric_name like '%TCP Socket (KGAS)%' or metric_name like '%Direct Reads%') */ order by snap_id, stat_source, metric_name; -- testing SQL up tp this point
 , outliers as
 ( select iqr.*
 , case when Q1 - (nvl(:iqr_factor, 1.5) * IQR) > 0 then Q1 - (nvl(:iqr_factor, 1.5) * IQR) else 0 end as lower_outlier
@@ -85,12 +78,16 @@ from (select stat.*
 , Percentile_Cont(nvl(:Q3_PERCENTILE,0.75)) WITHIN GROUP(Order By average) OVER(partition by stat_source, metric_name) 
 - Percentile_Cont(nvl(:Q1_PERCENTILE,0.25)) WITHIN GROUP(Order By average) OVER(partition by stat_source, metric_name) as IQR
 from stat
+where 1=1
+  and snap_id in (select snap_id from snaps_to_use)
+  and stat_source like nvl(:stat_source, stat_source)
 ) iqr
 )
 -- select * from outliers order by snap_id, stat_source, metric_name;
 , normal_ranges as
 (
-select  metric_name
+select metric_id
+, metric_name
 , stat_source
 , round(case when (AVG_average - (2 * STDDEV_average )) < 0 then min_average
        else (AVG_average - (2 * STDDEV_average))
@@ -103,7 +100,8 @@ select  metric_name
 , stddev_average
 from
 (
-select metric_name
+select metric_id
+, metric_name
 , round((VARIANCE(average) ), 1) variance_average
 , round((STDDEV(average)  ), 1) stddev_average
 , round((AVG(average)  )) avg_average
@@ -113,9 +111,11 @@ select metric_name
 from outliers stat
 where 1=1
   and (average > lower_outlier and average < upper_outlier) -- remove the outliers
+  and snap_id <> min_snap_id
+  and snap_id in (select snap_id from snaps_for_normal_ranges)
 --  and trunc(begin_interval_time) between trunc(sysdate- nvl(:normal_ranges_days_back,8)) and trunc(sysdate)
 --  and upper(metric_name) like upper(nvl(:metric_name, metric_name))
-group by metric_name, stat_source
+group by metric_id, metric_name, stat_source
 )
 )
 -- select * from normal_ranges order by upper(metric_name); -- testing SQL up tp this point
@@ -126,6 +126,7 @@ select instance_name
 , begin_interval_time as begin_time
 , a.metric_name
 , average 
+, metric_id
 , host_name
 , version
 , dbid
@@ -138,6 +139,8 @@ from stat a
 , taxonomy b
 where 1=1
   and a.stat_source = b.stat_source and a.metric_name = b.metric_name
+  and snap_id <> min_snap_id
+  and snap_id in (select snap_id from snaps_for_interval)
 /*
   and decode(:days_back_only_Y_N,'Y', begin_interval_time, trunc(sysdate-:days_back) ) >= trunc(sysdate-:days_back)
   and (
@@ -170,6 +173,7 @@ select instance_name
 , variance_average
 , stddev_average
 , average_value
+, metrics.metric_id
 , metrics.stat_source
 , taxonomy_type
 , category
@@ -178,6 +182,7 @@ from metrics
 , normal_ranges
 where 1=1
 and metrics.metric_name = normal_ranges.metric_name
+and metrics.metric_id = normal_ranges.metric_id
 and metrics.stat_source = normal_ranges.stat_source
 )
 -- select * from flags; -- testing SQL up tp this point
@@ -244,9 +249,9 @@ where 1=1
 /* */
 --  and upper(metric_name) like upper(nvl(:metric_name_2, metric_name))
 --  and stat_source like nvl(:stat_source, stat_source)
---  and category like nvl(:category, category)
---  and sub_category like nvl(:sub_category, sub_category)
-order by instance_name, snap_id, stat_source, decode(:flagged_values_only_Y_N,'Y', flag_ratio, 1) desc
+-- and category like nvl(:category, category)
+-- and sub_category like nvl(:sub_category, sub_category)
+order by instance_name, snap_id, decode(:flagged_values_only_Y_N,'Y', flag_ratio, 1) desc, stat_source,  metric_id
 )
 -- select * from metrics_time_series_view; -- testing thus far
 , metrics_aggregate_view as
@@ -303,6 +308,7 @@ order by 6 desc, 11 desc, taxonomy_type, category, sub_category, stat_source, me
 from metrics_time_series_view
 group by taxonomy_type, category
 )
--- select * from metrics_time_series_view;
--- select * from metrics_aggregate_view;
-select * from category_count_view order by category_count desc;
+select * from metrics_time_series_view;
+--select * from metrics_aggregate_view;
+--select * from category_count_view;
+
